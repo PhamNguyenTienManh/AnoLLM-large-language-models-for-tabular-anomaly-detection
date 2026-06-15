@@ -32,9 +32,12 @@ class AnoLLMTrainer(Trainer):
 		train_dataset = (
 			self.train_dataset
 		)  # self._remove_unused_columns(self.train_dataset, description="training")
-		local_rank = int(os.environ["LOCAL_RANK"])
-		world_size = dist.get_world_size()
-		train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=local_rank, shuffle=False, drop_last=True)
+		if dist.is_available() and dist.is_initialized():
+			local_rank = int(os.environ["LOCAL_RANK"])
+			world_size = dist.get_world_size()
+			train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=local_rank, shuffle=False, drop_last=True)
+		else:
+			train_sampler = None
 
 		return DataLoader(
 			train_dataset,
@@ -113,16 +116,19 @@ class AnoLLMTrainer(Trainer):
 				eval_losses[start_idx:end_idx, perm_idx] = eval_loss_batch.cpu().numpy()
 				start_idx = end_idx
 
-		local_rank = int(os.environ["LOCAL_RANK"])
-		world_size = dist.get_world_size()
-		
-		all_perplexity = [None for _ in range(world_size)]
-		dist.all_gather_object(all_perplexity, perplexities)
-		perplexities = np.concatenate(all_perplexity, axis = 1)
-		
-		all_eval_loss = [None for _ in range(world_size)]
-		dist.all_gather_object(all_eval_loss, eval_losses)
-		eval_losses = np.concatenate(all_eval_loss, axis = 1)
+		if dist.is_available() and dist.is_initialized():
+			local_rank = int(os.environ["LOCAL_RANK"])
+			world_size = dist.get_world_size()
+			
+			all_perplexity = [None for _ in range(world_size)]
+			dist.all_gather_object(all_perplexity, perplexities)
+			perplexities = np.concatenate(all_perplexity, axis = 1)
+			
+			all_eval_loss = [None for _ in range(world_size)]
+			dist.all_gather_object(all_eval_loss, eval_losses)
+			eval_losses = np.concatenate(all_eval_loss, axis = 1)
+		else:
+			local_rank = 0
 		
 		labels = eval_dataset.anomaly_labels
 		

@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AnoLLM Transaction Admin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              base: "#0f172a",
+              muted: "#64748b",
+              paper: "#f8fafc",
+              line: "#e2e8f0",
+              brand: {
+                50: "#eff6ff",
+                100: "#dbeafe",
+                500: "#3b82f6",
+                600: "#2563eb",
+                700: "#1d4ed8"
+              },
+              mint: {
+                50: "#ecfdf5",
+                500: "#10b981",
+                600: "#059669"
+              }
+            },
+            boxShadow: {
+              panel: "0 18px 50px rgba(15, 23, 42, 0.08)"
+            }
+          }
+        }
+      };
+    </script>
+  </head>
+  <body class="bg-paper text-base antialiased">
+    <div class="min-h-screen">
+      <aside class="fixed inset-y-0 left-0 z-30 hidden w-72 border-r border-line bg-white xl:block">
+        <div class="flex h-full flex-col">
+          <div class="border-b border-line px-6 py-6">
+            <div class="flex h-11 w-11 items-center justify-center rounded-lg bg-base text-lg font-semibold text-white">A</div>
+            <h1 class="mt-4 text-xl font-semibold">AnoLLM Admin</h1>
+            <p class="mt-1 text-sm leading-6 text-muted">Quản lý dataset, train, evaluate và anomaly scores cho bài transaction.</p>
+          </div>
+
+          <nav id="tabs" class="flex-1 space-y-1 px-3 py-4"></nav>
+
+          <div class="border-t border-line px-6 py-5">
+            <p class="text-xs font-semibold uppercase tracking-[0.18em] text-muted">Current run</p>
+            <p class="mt-2 break-words text-sm font-medium">split0_large_bs4_steps500</p>
+          </div>
+        </div>
+      </aside>
+
+      <main class="xl:pl-72">
+        <header class="sticky top-0 z-20 border-b border-line bg-white/90 backdrop-blur">
+          <div class="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8">
+            <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <p class="text-sm font-semibold text-brand-700">Transaction anomaly detection</p>
+                <h2 id="page-title" class="mt-1 text-2xl font-semibold tracking-tight">Dashboard</h2>
+              </div>
+              <div class="flex flex-wrap items-center gap-2">
+                <span id="data-status" class="rounded-full border border-line bg-white px-3 py-1 text-sm text-muted">Đang tải dữ liệu...</span>
+                <span class="rounded-full bg-base px-3 py-1 text-sm font-medium text-white">distilgpt2</span>
+                <span class="rounded-full border border-line bg-white px-3 py-1 text-sm text-muted">CPU</span>
+              </div>
+            </div>
+            <select id="mobile-tabs" class="rounded border border-line bg-white px-3 py-2 text-sm xl:hidden"></select>
+          </div>
+        </header>
+
+        <section class="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+          <div id="app"></div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="fixed bottom-5 right-5 z-50 hidden rounded-lg bg-base px-4 py-3 text-sm font-medium text-white shadow-panel"></div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

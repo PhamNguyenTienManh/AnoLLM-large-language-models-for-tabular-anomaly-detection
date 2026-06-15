@@ -73,7 +73,10 @@ class AnoLLM:
 		self.tokenizer = AutoTokenizer.from_pretrained(self.llm)
 		self.tokenizer.pad_token = self.tokenizer.eos_token
 		if not random_init:
-			self.model = AutoModelForCausalLM.from_pretrained(self.llm, torch_dtype=torch.bfloat16)
+			model_kwargs = {}
+			if train_kwargs.get("bf16", False):
+				model_kwargs["torch_dtype"] = torch.bfloat16
+			self.model = AutoModelForCausalLM.from_pretrained(self.llm, **model_kwargs)
 		else:
 			config = AutoConfig.from_pretrained(self.llm)
 			self.model = AutoModelForCausalLM.from_config(config)
@@ -174,6 +177,8 @@ class AnoLLM:
 			self.train_hyperparameters["logging_dir"] = "./logs"
 			self.train_hyperparameters["logging_steps"] = 50
 			self.train_hyperparameters["log_level"] = 'info'	
+		else:
+			self.train_hyperparameters["report_to"] = []
 		
 		training_args = TrainingArguments(
 			self.experiment_dir,
@@ -310,7 +315,7 @@ class AnoLLM:
 		else:
 			os.mkdir(directory)
 
-		model_to_save = self.model.module
+		model_to_save = self.model.module if hasattr(self.model, "module") else self.model
 		save_model(model_to_save, path)
 	
 	def load_from_state_dict(self, path: str):

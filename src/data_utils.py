@@ -24,7 +24,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.datasets import fetch_20newsgroups
 import gensim.downloader as api
 
-MIXED = [ 'vifd', 'fraudecom',  'fakejob',  'seismic', 'lymphography',  '20news-0', '20news-1','20news-2','20news-3','20news-4','20news-5']
+MIXED = [ 'vifd', 'fraudecom',  'fakejob', 'transaction',  'seismic', 'lymphography',  '20news-0', '20news-1','20news-2','20news-3','20news-4','20news-5']
 ODDS = ['breastw', 'cardio', 'ecoli', 'lymphography', 'vertebral', 'wbc', 'wine', 'yeast', 'heart', 'arrhythmia', 
 		'mulcross', 'annthyroid', 'covertype', 'glass', 'http', 'ionosphere', 'letter_recognition', 'mammography',  'musk', 
 		'optdigits', 'pendigits', 'pima', 'satellite', 'satimage-2', 'seismic', 'shuttle', 'smtp', 'speech', 'thyroid', 'vowels']
@@ -45,6 +45,7 @@ DATA_MAP ={
 	'fraudecom': None,
 	'fakejob': None,
 	'fakenews': None,
+	'transaction': None,
 	# without feature names 
 	'heart': 96,
 	'arrhythmia': None, # download from https://odds.cs.stonybrook.edu/arrhythmia-dataset/
@@ -83,6 +84,25 @@ def load_dataset(dataset_name, data_dir):
 	dataset_dir = Path(data_dir) / dataset_name
 	os.makedirs(dataset_dir, exist_ok = True)
 	pkl_file = dataset_dir / 'data.pkl'
+	if dataset_name == 'transaction':
+		data_path = dataset_dir / 'transaction.csv'
+		if not os.path.exists(data_path):
+			raise ValueError(
+				'transaction.csv is not found in {}. Run: python scripts/generate_transaction_dataset.py'.format(
+					data_path.parent
+				)
+			)
+
+		df = pd.read_csv(data_path)
+		label_column = 'is_anomaly'
+		if label_column not in df.columns:
+			raise ValueError('transaction.csv must contain an is_anomaly label column.')
+
+		y = df[label_column].astype(int).to_numpy()
+		X = df.drop(label_column, axis=1)
+		X.columns = [name.replace('_', ' ') for name in X.columns]
+		return X, y
+
 	if os.path.exists(pkl_file):
 		with open(pkl_file, 'rb') as f:
 			X, y= pickle.load(f)
@@ -508,7 +528,8 @@ def split_data(
 	train_indices, test_indices = [], []
 	for i in range(n_splits):
 		pkl_file = split_dir / 'index{}.pkl'.format(i)
-		if os.path.exists(pkl_file):
+		use_cached_split = os.path.exists(pkl_file) and dataset_name != 'transaction'
+		if use_cached_split:
 			with open(pkl_file, 'rb') as f:
 				train_index, test_index = pickle.load(f)
 		else:
@@ -533,8 +554,11 @@ def split_data(
 				raise ValueError('Invalid setting. Choose either unsupervised or semi_supervised')
 			train_index = np.random.permutation(train_index)
 			test_index = np.random.permutation(test_index)
-			with open(pkl_file, 'wb') as f:
-				pickle.dump((train_index, test_index), f)
+			try:
+				with open(pkl_file, 'wb') as f:
+					pickle.dump((train_index, test_index), f)
+			except PermissionError:
+				print("Warning: could not write split cache {}; using in-memory split.".format(pkl_file))
 		train_indices.append(train_index)
 		test_indices.append(test_index)
 	return train_indices, test_indices 

@@ -1,17 +1,33 @@
 import os
+import sys
 from pathlib import Path
+
+from ssl_patch import patch_ssl_context
+
+patch_ssl_context()
 
 import numpy as np
 import argparse
 import torch.distributed as dist
 import torch
-import wandb
 import time
 
-from anollm import AnoLLM
 from src.data_utils import load_data, DATA_MAP, get_text_columns, get_max_length_dict
 
 #run by torchrun --nproc_per_node=8 train_llm.py <args> 
+
+
+def is_distributed():
+	return dist.is_available() and dist.is_initialized()
+
+
+def get_rank():
+	return dist.get_rank() if is_distributed() else 0
+
+
+def barrier():
+	if is_distributed():
+		dist.barrier()
 
 def get_args():
 	parser = argparse.ArgumentParser()
@@ -50,6 +66,8 @@ def get_args():
 	args = parser.parse_args()
 	if args.exp_dir is None:
 		args.exp_dir = Path('exp') / args.dataset / args.setting / "split{}".format(args.n_splits) / "split{}".format(args.split_idx)
+	else:
+		args.exp_dir = Path(args.exp_dir)
 
 	if args.model == 'smol':
 		args.model = 'HuggingFaceTB/SmolLM-135M'
@@ -91,16 +109,19 @@ def get_run_name(args):
 
 def main():
 	# Set CUDA devices for each process
-	local_rank = int(os.environ["LOCAL_RANK"])
-	torch.cuda.set_device(local_rank)
+	local_rank = int(os.environ.get("LOCAL_RANK", 0))
+	use_cuda = torch.cuda.is_available()
+	device = torch.device("cuda", local_rank) if use_cuda else torch.device("cpu")
+	if use_cuda:
+		torch.cuda.set_device(local_rank)
 
 	args = get_args()
-	if dist.get_rank() == 0:
+	if get_rank() == 0:
 		X_train, X_test, y_train, y_test = load_data(args)
-	dist.barrier()
-	if dist.get_rank() != 0:
+	barrier()
+	if get_rank() != 0:
 		X_train, X_test, y_train, y_test = load_data(args)
-	dist.barrier()
+	barrier()
 	
 	run_name = get_run_name(args)
 	efficient_finetuning = 'lora' if args.lora else ''
@@ -117,6 +138,8 @@ def main():
 	max_length_dict = get_max_length_dict(args.dataset)
 	text_columns = get_text_columns(args.dataset)
 	def get_model():
+		from anollm import AnoLLM
+
 		model = AnoLLM(args.model,
 					batch_size=args.batch_size,
 					max_steps = args.max_steps,
@@ -125,27 +148,33 @@ def main():
 					textual_columns = text_columns,
 					random_init=args.random_init,
 					no_random_permutation=args.no_random_permutation,
-					bf16=True,
+					bf16=use_cuda,
 					adam_beta2=0.99,
 					adam_epsilon=1e-7,
 					learning_rate=args.lr,
 				)
 		return model 
 	# Initialize the LLM 
-	if dist.get_rank() == 0:
+	if get_rank() == 0:
 		anollm = get_model()
-	dist.barrier()
-	if dist.get_rank() != 0:
+	barrier()
+	if get_rank() != 0:
 		anollm = get_model()
-	dist.barrier()
+	barrier()
 	# Move the model to the appropriate GPU
-	anollm.model.to(local_rank)  
+	anollm.model.to(device)
 
 	# Wrap the model for distributed training
-	anollm.model = torch.nn.parallel.DistributedDataParallel(
-		anollm.model, device_ids=[local_rank], output_device=local_rank
-	)
-	if args.wandb and dist.get_rank() == 0: 
+	if is_distributed():
+		if use_cuda:
+			anollm.model = torch.nn.parallel.DistributedDataParallel(
+				anollm.model, device_ids=[local_rank], output_device=local_rank
+			)
+		else:
+			anollm.model = torch.nn.parallel.DistributedDataParallel(anollm.model)
+	if args.wandb and get_rank() == 0: 
+		import wandb
+
 		run = wandb.init(
 			entity=args.entity,
 			project=args.project,
@@ -172,7 +201,7 @@ def main():
 	end_time = time.time()
 
 	# Save the model only from rank 0 process
-	if dist.get_rank() == 0:
+	if get_rank() == 0:
 		
 		print("Training time:", end_time - start_time)
 		run_time_dir = args.exp_dir / "run_time" / "train"
@@ -185,9 +214,16 @@ def main():
 		anollm.save_state_dict(model_path)
 		
 		
-	dist.destroy_process_group()
+	if is_distributed():
+		dist.destroy_process_group()
 
 if __name__ == "__main__":
+	if any(arg in ("-h", "--help") for arg in sys.argv[1:]):
+		get_args()
+		sys.exit(0)
+
 	# Initialize the distributed process group
-	dist.init_process_group(backend="nccl") 
+	if {"RANK", "WORLD_SIZE", "LOCAL_RANK"}.issubset(os.environ):
+		backend = "nccl" if torch.cuda.is_available() and dist.is_nccl_available() else "gloo"
+		dist.init_process_group(backend=backend)
 	main()
