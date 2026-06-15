@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+
+# Local/runtime files
+*.log
+*.pid
+
+# DVC-managed data and experiment artifacts.
+# Track these with `dvc add data exp`, then commit only `data.dvc`, `exp.dvc`, and `.dvc/`.
+/data/
+/exp/
+
+# Large ML artifacts that should not go directly into Git.
+*.csv
+*.pkl
+*.pt
+*.pth
+*.ckpt
+*.npy
+*.npz
+*.parquet
+
+# Keep DVC metadata visible even when artifact extensions are ignored.
+!*.dvc
+!.dvc/
+!.dvc/**
+/data
+/exp
