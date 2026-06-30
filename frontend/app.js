@@ -1,6 +1,20 @@
 const DATASET_URL = "../data/transaction/transaction.csv";
-const SCORES_URL = "../exp/transaction/semi_supervised/split1/split0_large_bs4_steps500/scores/transaction_scores_with_labels.csv";
-const CURRENT_EXP_DIR = "exp/transaction/semi_supervised/split1/split0_large_bs4_steps500";
+const SCORES_URL = "../exp/transaction/semi_supervised/split1/split0_hard/scores/transaction_scores_with_labels.csv";
+const CURRENT_EXP_DIR = "exp/transaction/semi_supervised/split1/split0_hard";
+const ATTRIBUTION_URL = "../exp/transaction/semi_supervised/split1/split0_hard/scores/feature_attribution.csv";
+
+const Z_FEATURES = [
+  { key: "z__amount", label: "amount" },
+  { key: "z__currency", label: "currency" },
+  { key: "z__merchant", label: "merchant" },
+  { key: "z__category", label: "category" },
+  { key: "z__country", label: "country" },
+  { key: "z__device", label: "device" },
+  { key: "z__hour", label: "hour" },
+  { key: "z__payment method", label: "payment" },
+  { key: "z__transaction id", label: "txn id" },
+  { key: "z__user id", label: "user id" },
+];
 
 const tabs = [
   { id: "dashboard", label: "Dashboard", hint: "Tổng quan" },
@@ -8,6 +22,7 @@ const tabs = [
   { id: "training", label: "Training", hint: "Cấu hình train" },
   { id: "evaluation", label: "Evaluation", hint: "Đánh giá" },
   { id: "scores", label: "Scores", hint: "Anomaly scores" },
+  { id: "attribution", label: "Feature attribution", hint: "z-index theo feature" },
 ];
 
 const state = {
@@ -15,26 +30,31 @@ const state = {
   dataset: [],
   scores: [],
   metrics: [],
+  attribution: [],
   datasetPage: 1,
   scorePage: 1,
+  attributionPage: 1,
   datasetQuery: "",
   datasetLabel: "all",
   scoreLabel: "all",
   scoreThreshold: 0,
   dashboardThreshold: 0,
+  attributionQuery: "",
+  attributionLabel: "all",
+  attributionType: "all",
   trainConfig: {
     model: "distilgpt2",
     batchSize: 4,
-    maxSteps: 500,
-    evalSteps: 100,
+    maxSteps: 800,
+    evalSteps: 200,
     trainRatio: 0.75,
     learningRate: 0.00005,
     expDir: CURRENT_EXP_DIR,
   },
   evalConfig: {
     batchSize: 8,
-    nPermutations: 1,
-    threshold: 57.67,
+    nPermutations: 16,
+    threshold: 50,
   },
 };
 
@@ -125,6 +145,28 @@ function bestMetric() {
   }, state.metrics[0] || confusionAt(0));
 }
 
+function fprOf(point) {
+  return point.fp + point.tn === 0 ? 0 : point.fp / (point.fp + point.tn);
+}
+
+function rocPoints() {
+  const points = state.metrics.map((m) => ({
+    fpr: fprOf(m),
+    tpr: m.tp + m.fn === 0 ? 0 : m.tp / (m.tp + m.fn),
+  }));
+  points.push({ fpr: 0, tpr: 0 }, { fpr: 1, tpr: 1 });
+  return points.sort((a, b) => (a.fpr !== b.fpr ? a.fpr - b.fpr : a.tpr - b.tpr));
+}
+
+function rocAuc() {
+  const pts = rocPoints();
+  let area = 0;
+  for (let i = 1; i < pts.length; i += 1) {
+    area += ((pts[i].fpr - pts[i - 1].fpr) * (pts[i].tpr + pts[i - 1].tpr)) / 2;
+  }
+  return area;
+}
+
 function stats() {
   const datasetNormal = state.dataset.filter((row) => Number(row.is_anomaly) === 0).length;
   const datasetFraud = state.dataset.filter((row) => Number(row.is_anomaly) === 1).length;
@@ -169,6 +211,7 @@ function metricCard(label, value, detail, tone = "neutral") {
     neutral: "bg-white border-line",
     brand: "bg-brand-50 border-brand-100",
     mint: "bg-mint-50 border-emerald-100",
+    indigo: "bg-indigo-50 border-indigo-200",
   };
   return `
     <article class="rounded-xl border ${tones[tone]} p-5 shadow-panel">
@@ -190,7 +233,8 @@ function renderDashboard() {
     "Dashboard",
     `
       <div class="space-y-6">
-        <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+          ${metricCard("ROC-AUC", formatNumber(rocAuc(), 4), `Trên ${state.scores.length} dòng test`, "indigo")}
           ${metricCard("NLL threshold", formatNumber(current.threshold, 0), `Best F1 threshold: ${formatNumber(best.threshold)}`, "neutral")}
           ${metricCard("Precision", `${formatNumber(current.precision * 100, 1)}%`, `TP ${current.tp}, FP ${current.fp}`, "brand")}
           ${metricCard("Recall", `${formatNumber(current.recall * 100, 1)}%`, `FN ${current.fn}, fraud ${s.scoreFraud}`, "mint")}
@@ -259,6 +303,39 @@ function renderDashboard() {
           </section>
         </div>
 
+        <div class="grid gap-6 xl:grid-cols-[1fr_320px]">
+          <section class="rounded-xl border border-line bg-white p-6 shadow-panel">
+            <div class="flex flex-col gap-5">
+              <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <h3 class="text-lg font-semibold">ROC Curve</h3>
+                  <p class="mt-1 text-sm text-muted">TPR theo FPR khi quét NLL threshold. Chấm tím là threshold hiện tại.</p>
+                </div>
+                <span class="rounded-lg bg-base px-3 py-2 text-sm font-semibold text-white">AUC ${formatNumber(rocAuc(), 4)}</span>
+              </div>
+
+              <div class="flex flex-wrap gap-4 text-sm">
+                <span class="inline-flex items-center gap-2"><span class="h-3 w-3 rounded-sm bg-indigo-600"></span>ROC curve (model)</span>
+                <span class="inline-flex items-center gap-2"><span class="h-3 w-3 rounded-sm border border-dashed border-slate-500 bg-slate-100"></span>Random (AUC 0.5)</span>
+                <span class="inline-flex items-center gap-2"><span class="h-3 w-3 rounded-full bg-indigo-700"></span>Threshold hiện tại</span>
+              </div>
+
+              <canvas id="roc-chart" class="h-[430px] w-full rounded-lg border border-line bg-white"></canvas>
+            </div>
+          </section>
+
+          <section class="rounded-xl border border-line bg-white p-6 shadow-panel">
+            <h3 class="text-lg font-semibold">Điểm hoạt động</h3>
+            <p class="mt-1 text-sm text-muted">Tại threshold hiện tại.</p>
+            <div class="mt-5 space-y-3 text-sm">
+              <div class="flex justify-between"><span class="text-muted">ROC-AUC</span><span class="font-semibold">${formatNumber(rocAuc(), 4)}</span></div>
+              <div class="flex justify-between"><span class="text-muted">TPR (Recall)</span><span class="font-semibold">${formatNumber(current.recall * 100, 1)}%</span></div>
+              <div class="flex justify-between"><span class="text-muted">FPR</span><span class="font-semibold">${formatNumber(fprOf(current) * 100, 1)}%</span></div>
+              <div class="flex justify-between"><span class="text-muted">Specificity (TNR)</span><span class="font-semibold">${formatNumber((1 - fprOf(current)) * 100, 1)}%</span></div>
+            </div>
+          </section>
+        </div>
+
         <div class="grid gap-6 xl:grid-cols-2">
           <section class="rounded-xl border border-line bg-white p-6 shadow-panel">
             <h3 class="text-lg font-semibold">Score separation</h3>
@@ -294,6 +371,7 @@ function renderDashboard() {
     `
   );
   drawPrChart();
+  drawRocChart();
   bindDashboardEvents();
 }
 
@@ -566,6 +644,208 @@ function renderScores() {
   bindScoreEvents();
 }
 
+function zStyle(value) {
+  const v = Number(value);
+  if (!Number.isFinite(v)) return "background-color:#ffffff;color:#94a3b8";
+  if (v <= 0) return "background-color:#f8fafc;color:#94a3b8";
+  if (v <= 1) return "background-color:#fef9c3;color:#854d0e";
+  if (v <= 2) return "background-color:#fde047;color:#713f12";
+  if (v <= 4) return "background-color:#fb923c;color:#ffffff";
+  return "background-color:#ef4444;color:#ffffff";
+}
+
+function attributionTypes() {
+  return [...new Set(state.attribution.map((row) => row.anomaly_type).filter(Boolean))].sort();
+}
+
+function filterAttribution() {
+  const q = state.attributionQuery.toLowerCase().trim();
+  return state.attribution
+    .filter((row) => state.attributionLabel === "all" || String(row.is_anomaly) === state.attributionLabel)
+    .filter((row) => state.attributionType === "all" || row.anomaly_type === state.attributionType)
+    .filter((row) => {
+      if (!q) return true;
+      return String(row.transaction_id).toLowerCase().includes(q) || String(row.row_index).includes(q);
+    })
+    .sort((a, b) => Number(b.top_z) - Number(a.top_z));
+}
+
+function renderAttribution() {
+  if (!state.attribution.length) {
+    shell(
+      "Feature attribution",
+      `
+        <section class="rounded-xl border border-amber-200 bg-amber-50 p-6 text-amber-800">
+          <h3 class="text-lg font-semibold">Chưa có dữ liệu feature attribution.</h3>
+          <p class="mt-2 text-sm">Cần file <code>scores/feature_attribution.csv</code> trong exp dir hiện tại. Sinh bằng:</p>
+          <pre class="mt-3 rounded bg-amber-950 p-4 text-sm text-white"><code>python scripts/explain_anomalies.py --exp_dir ${CURRENT_EXP_DIR} --train_ratio 0.75 --n_permutations 4 --batch_size 16</code></pre>
+        </section>
+      `
+    );
+    return;
+  }
+
+  const filtered = filterAttribution();
+  const pageSize = 20;
+  const totalPages = Math.max(Math.ceil(filtered.length / pageSize), 1);
+  state.attributionPage = Math.min(state.attributionPage, totalPages);
+  const start = (state.attributionPage - 1) * pageSize;
+  const rows = filtered.slice(start, start + pageSize);
+
+  const means = Z_FEATURES.map((f) => {
+    const vals = filtered.map((row) => Number(row[f.key])).filter(Number.isFinite);
+    const mean = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+    return { ...f, mean };
+  }).sort((a, b) => b.mean - a.mean);
+  const maxMean = Math.max(...means.map((m) => Math.abs(m.mean)), 1e-6);
+
+  const leadCounts = {};
+  filtered.forEach((row) => {
+    leadCounts[row.top_feature] = (leadCounts[row.top_feature] || 0) + 1;
+  });
+  const leadTop = Object.entries(leadCounts).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+  const fraudCount = filtered.filter((row) => Number(row.is_anomaly) === 1).length;
+
+  shell(
+    "Feature attribution",
+    `
+      <div class="space-y-6">
+        <div class="grid gap-4 md:grid-cols-3">
+          ${metricCard("Transactions", filtered.length.toLocaleString(), `Fraud: ${fraudCount.toLocaleString()} / Normal: ${(filtered.length - fraudCount).toLocaleString()}`, "indigo")}
+          ${metricCard("Feature dẫn dắt nhiều nhất", means[0] ? means[0].label : "-", `mean z = ${means[0] ? formatNumber(means[0].mean) : "-"}`, "brand")}
+          ${metricCard("Top z cao nhất", filtered.length ? formatNumber(filtered[0].top_z) : "-", filtered.length ? `${filtered[0].transaction_id} (${filtered[0].top_feature})` : "-", "neutral")}
+        </div>
+
+        <div class="grid gap-6 xl:grid-cols-2">
+          <section class="rounded-xl border border-line bg-white p-6 shadow-panel">
+            <h3 class="text-lg font-semibold">Mean z theo feature</h3>
+            <p class="mt-1 text-sm text-muted">Trung bình z trên ${filtered.length.toLocaleString()} transaction sau filter. z càng cao = feature càng bất thường.</p>
+            <div class="mt-4 space-y-2">
+              ${means.map((m) => {
+                const width = Math.max((Math.abs(m.mean) / maxMean) * 100, 2);
+                return `
+                  <div class="flex items-center gap-3 text-sm">
+                    <span class="w-20 shrink-0 text-right text-muted">${m.label}</span>
+                    <div class="h-3 flex-1 rounded bg-slate-100">
+                      <div class="h-3 rounded ${m.mean >= 0 ? "bg-indigo-500" : "bg-slate-400"}" style="width:${width}%"></div>
+                    </div>
+                    <span class="w-16 shrink-0 text-right font-semibold">${formatNumber(m.mean)}</span>
+                  </div>
+                `;
+              }).join("")}
+            </div>
+          </section>
+
+          <section class="rounded-xl border border-line bg-white p-6 shadow-panel">
+            <h3 class="text-lg font-semibold">Feature dẫn dắt (top_feature)</h3>
+            <p class="mt-1 text-sm text-muted">Số transaction mà mỗi feature là lý do chính (z cao nhất).</p>
+            <div class="mt-4 space-y-2">
+              ${leadTop.map(([feature, count]) => {
+                const width = Math.max((count / filtered.length) * 100, 2);
+                return `
+                  <div class="flex items-center gap-3 text-sm">
+                    <span class="w-28 shrink-0 truncate text-right text-muted">${feature}</span>
+                    <div class="h-3 flex-1 rounded bg-slate-100">
+                      <div class="h-3 rounded bg-brand-500" style="width:${width}%"></div>
+                    </div>
+                    <span class="w-20 shrink-0 text-right font-semibold">${count} (${formatNumber((count / filtered.length) * 100, 0)}%)</span>
+                  </div>
+                `;
+              }).join("")}
+            </div>
+            <div class="mt-5 flex flex-wrap items-center gap-3 text-xs text-muted">
+              <span class="font-semibold uppercase tracking-wide">Thang màu z</span>
+              <span class="rounded px-2 py-1" style="${zStyle(0)}">≤ 0</span>
+              <span class="rounded px-2 py-1" style="${zStyle(0.5)}">0–1</span>
+              <span class="rounded px-2 py-1" style="${zStyle(1.5)}">1–2</span>
+              <span class="rounded px-2 py-1" style="${zStyle(3)}">2–4</span>
+              <span class="rounded px-2 py-1" style="${zStyle(5)}">&gt; 4</span>
+            </div>
+          </section>
+        </div>
+
+        <section class="rounded-xl border border-line bg-white p-5 shadow-panel">
+          <div class="grid gap-3 md:grid-cols-[1fr_180px_200px_auto]">
+            <input id="attribution-query" value="${state.attributionQuery}" class="rounded-lg border border-line px-3 py-2 text-sm outline-none focus:border-brand-500" placeholder="Tìm transaction_id hoặc row_index..." />
+            <select id="attribution-label" class="rounded-lg border border-line px-3 py-2 text-sm">
+              <option value="all" ${state.attributionLabel === "all" ? "selected" : ""}>Tất cả label</option>
+              <option value="0" ${state.attributionLabel === "0" ? "selected" : ""}>Normal</option>
+              <option value="1" ${state.attributionLabel === "1" ? "selected" : ""}>Fraud</option>
+            </select>
+            <select id="attribution-type" class="rounded-lg border border-line px-3 py-2 text-sm">
+              <option value="all" ${state.attributionType === "all" ? "selected" : ""}>Tất cả loại</option>
+              ${attributionTypes().map((t) => `<option value="${t}" ${state.attributionType === t ? "selected" : ""}>${t}</option>`).join("")}
+            </select>
+            <button id="reset-attribution-filter" class="rounded-lg bg-base px-4 py-2 text-sm font-medium text-white">Reset</button>
+          </div>
+        </section>
+
+        <section class="rounded-xl border border-line bg-white shadow-panel">
+          <div class="border-b border-line px-5 py-4">
+            <h3 class="font-semibold">Heatmap z theo từng transaction</h3>
+            <p class="mt-1 text-sm text-muted">Đọc từ feature_attribution.csv, sort theo top_z giảm dần. Mỗi ô = z của feature đó trong transaction.</p>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="min-w-full text-left text-sm">
+              <thead class="border-b border-line bg-slate-50 text-xs uppercase tracking-wide text-muted">
+                <tr>
+                  <th class="px-3 py-3 font-semibold">row</th>
+                  <th class="px-3 py-3 font-semibold">transaction_id</th>
+                  <th class="px-3 py-3 font-semibold">label</th>
+                  <th class="px-3 py-3 font-semibold">type</th>
+                  ${Z_FEATURES.map((f) => `<th class="px-2 py-3 text-center font-semibold">${f.label}</th>`).join("")}
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-line">
+                ${rows.map((row) => `
+                  <tr class="hover:bg-slate-50">
+                    <td class="px-3 py-2 font-medium">${row.row_index}</td>
+                    <td class="px-3 py-2">${row.transaction_id}</td>
+                    <td class="px-3 py-2">${labelBadge(row.is_anomaly)}</td>
+                    <td class="px-3 py-2 text-xs text-muted">${row.anomaly_type}</td>
+                    ${Z_FEATURES.map((f) => {
+                      const isTop = f.label === row.top_feature || ("z__" + row.top_feature) === f.key;
+                      return `<td class="px-2 py-2 text-center font-medium ${isTop ? "ring-2 ring-inset ring-indigo-600" : ""}" style="${zStyle(row[f.key])}">${formatNumber(row[f.key], 1)}</td>`;
+                    }).join("")}
+                  </tr>
+                `).join("")}
+              </tbody>
+            </table>
+          </div>
+          ${pagination("attribution", state.attributionPage, totalPages)}
+        </section>
+      </div>
+    `
+  );
+  bindAttributionEvents();
+}
+
+function bindAttributionEvents() {
+  document.getElementById("attribution-query").addEventListener("input", (event) => {
+    state.attributionQuery = event.target.value;
+    state.attributionPage = 1;
+    renderAttribution();
+  });
+  document.getElementById("attribution-label").addEventListener("change", (event) => {
+    state.attributionLabel = event.target.value;
+    state.attributionPage = 1;
+    renderAttribution();
+  });
+  document.getElementById("attribution-type").addEventListener("change", (event) => {
+    state.attributionType = event.target.value;
+    state.attributionPage = 1;
+    renderAttribution();
+  });
+  document.getElementById("reset-attribution-filter").addEventListener("click", () => {
+    state.attributionQuery = "";
+    state.attributionLabel = "all";
+    state.attributionType = "all";
+    state.attributionPage = 1;
+    renderAttribution();
+  });
+}
+
 function inputField(label, id, value) {
   return `<label><span class="text-sm font-medium">${label}</span><input id="${id}" value="${value}" class="mt-1 w-full rounded-lg border border-line px-3 py-2 text-sm outline-none focus:border-brand-500" /></label>`;
 }
@@ -765,6 +1045,133 @@ function roundedRect(ctx, x, y, width, height, radius) {
   ctx.quadraticCurveTo(x, y, x + radius, y);
 }
 
+function drawRocChart() {
+  const canvas = document.getElementById("roc-chart");
+  if (!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  const scale = window.devicePixelRatio || 1;
+  canvas.width = rect.width * scale;
+  canvas.height = rect.height * scale;
+  const ctx = canvas.getContext("2d");
+  ctx.scale(scale, scale);
+  const width = rect.width;
+  const height = rect.height;
+  const pad = { left: 62, right: 30, top: 28, bottom: 62 };
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, width, height);
+
+  const current = confusionAt(Number(state.dashboardThreshold || bestMetric().threshold));
+  const curFpr = fprOf(current);
+  const xFor = (fpr) => pad.left + fpr * (width - pad.left - pad.right);
+  const yFor = (tpr) => pad.top + (1 - tpr) * (height - pad.top - pad.bottom);
+
+  ctx.strokeStyle = "#cbd5e1";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(pad.left, pad.top);
+  ctx.lineTo(pad.left, height - pad.bottom);
+  ctx.lineTo(width - pad.right, height - pad.bottom);
+  ctx.stroke();
+
+  ctx.font = "12px sans-serif";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  [0, 0.2, 0.4, 0.6, 0.8, 1].forEach((tick) => {
+    const y = yFor(tick);
+    ctx.strokeStyle = tick === 0 ? "#cbd5e1" : "#e2e8f0";
+    ctx.beginPath();
+    ctx.moveTo(pad.left, y);
+    ctx.lineTo(width - pad.right, y);
+    ctx.stroke();
+    ctx.fillStyle = "#64748b";
+    ctx.fillText(`${Math.round(tick * 100)}%`, pad.left - 10, y);
+  });
+
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  [0, 0.2, 0.4, 0.6, 0.8, 1].forEach((tick) => {
+    const x = xFor(tick);
+    ctx.strokeStyle = "#e2e8f0";
+    ctx.beginPath();
+    ctx.moveTo(x, pad.top);
+    ctx.lineTo(x, height - pad.bottom + 6);
+    ctx.stroke();
+    ctx.fillStyle = "#64748b";
+    ctx.fillText(`${Math.round(tick * 100)}%`, x, height - pad.bottom + 12);
+  });
+
+  ctx.save();
+  ctx.translate(16, pad.top + (height - pad.top - pad.bottom) / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillStyle = "#334155";
+  ctx.font = "12px sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("True Positive Rate", 0, 0);
+  ctx.restore();
+
+  ctx.fillStyle = "#334155";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "bottom";
+  ctx.fillText("False Positive Rate", pad.left + (width - pad.left - pad.right) / 2, height - 8);
+
+  ctx.strokeStyle = "#94a3b8";
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([5, 4]);
+  ctx.beginPath();
+  ctx.moveTo(xFor(0), yFor(0));
+  ctx.lineTo(xFor(1), yFor(1));
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  const curve = rocPoints().map((point) => ({ x: xFor(point.fpr), y: yFor(point.tpr) }));
+  if (curve.length) {
+    ctx.fillStyle = "rgba(79, 70, 229, 0.10)";
+    ctx.beginPath();
+    ctx.moveTo(xFor(0), yFor(0));
+    curve.forEach((point) => ctx.lineTo(point.x, point.y));
+    ctx.lineTo(xFor(1), yFor(0));
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle = "#4f46e5";
+    ctx.lineWidth = 3;
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    curve.forEach((point, index) => {
+      if (index === 0) ctx.moveTo(point.x, point.y);
+      else ctx.lineTo(point.x, point.y);
+    });
+    ctx.stroke();
+  }
+
+  const cx = xFor(curFpr);
+  const cy = yFor(current.recall);
+  ctx.fillStyle = "#4338ca";
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 8, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  const calloutWidth = 178;
+  const calloutX = Math.min(Math.max(cx - calloutWidth / 2, pad.left + 4), width - pad.right - calloutWidth);
+  const calloutY = Math.max(cy - 84, pad.top + 8);
+  ctx.fillStyle = "#0f172a";
+  roundedRect(ctx, calloutX, calloutY, calloutWidth, 76, 8);
+  ctx.fill();
+  ctx.fillStyle = "#ffffff";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.font = "12px sans-serif";
+  ctx.fillText(`Threshold: ${formatNumber(current.threshold)}`, calloutX + 12, calloutY + 10);
+  ctx.fillText(`TPR: ${formatNumber(current.recall * 100, 1)}%`, calloutX + 12, calloutY + 30);
+  ctx.fillText(`FPR: ${formatNumber(curFpr * 100, 1)}%`, calloutX + 12, calloutY + 50);
+}
+
 function bindDatasetEvents() {
   document.getElementById("dataset-query").addEventListener("input", (event) => {
     state.datasetQuery = event.target.value;
@@ -875,6 +1282,11 @@ function bindGlobalEvents() {
       state.scorePage = Math.min(Math.max(state.scorePage + (direction === "next" ? 1 : -1), 1), total);
       renderScores();
     }
+    if (type === "attribution") {
+      const total = Math.max(Math.ceil(filterAttribution().length / 20), 1);
+      state.attributionPage = Math.min(Math.max(state.attributionPage + (direction === "next" ? 1 : -1), 1), total);
+      renderAttribution();
+    }
   });
 
   document.getElementById("mobile-tabs").addEventListener("change", (event) => {
@@ -883,7 +1295,10 @@ function bindGlobalEvents() {
   });
 
   window.addEventListener("resize", () => {
-    if (state.activeTab === "dashboard") drawPrChart();
+    if (state.activeTab === "dashboard") {
+      drawPrChart();
+      drawRocChart();
+    }
   });
 }
 
@@ -893,6 +1308,7 @@ function render() {
   if (state.activeTab === "training") renderTraining();
   if (state.activeTab === "evaluation") renderEvaluation();
   if (state.activeTab === "scores") renderScores();
+  if (state.activeTab === "attribution") renderAttribution();
 }
 
 async function init() {
@@ -902,15 +1318,13 @@ async function init() {
     const [dataset, scores] = await Promise.all([fetchCsv(DATASET_URL), fetchCsv(SCORES_URL)]);
     state.dataset = dataset;
     state.scores = scores;
+    state.attribution = await fetchCsv(ATTRIBUTION_URL).catch(() => []);
     state.metrics = buildMetrics();
     state.scoreThreshold = Math.floor(bestMetric().threshold);
     state.evalConfig.threshold = Number(bestMetric().threshold.toFixed(2));
     state.dashboardThreshold = Number(bestMetric().threshold.toFixed(2));
-    document.getElementById("data-status").textContent = "Đã tải CSV thật";
-    document.getElementById("data-status").className = "rounded-full border border-emerald-200 bg-mint-50 px-3 py-1 text-sm font-medium text-mint-600";
     render();
   } catch (error) {
-    document.getElementById("data-status").textContent = "Không đọc được CSV";
     shell(
       "Không tải được dữ liệu",
       `

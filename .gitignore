@@ -35,5 +35,3 @@ env/
 !*.dvc
 !.dvc/
 !.dvc/**
-/data
-/exp

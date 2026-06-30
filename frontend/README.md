@@ -9,6 +9,7 @@ MVP frontend Tailwind cho pipeline AnoLLM transaction.
 - Training: form cấu hình train, tạo/copy command, nút Run Training để nối backend sau này.
 - Evaluation: form cấu hình evaluate, threshold simulator, tạo/copy command, nút Run Evaluate để nối backend sau này.
 - Scores: đọc score thật từ `transaction_scores_with_labels.csv`, filter theo label/threshold và join với transaction gốc.
+- Feature attribution: đọc `feature_attribution.csv`, heatmap z theo từng feature cho mỗi transaction test set, kèm mean z theo feature và phân bố top_feature; filter theo label/loại fraud/transaction_id.
 
 ## Cách Chạy
 
@@ -30,7 +31,8 @@ http://localhost:5173/frontend/
 
 ```text
 ../data/transaction/transaction.csv
-../exp/transaction/semi_supervised/split1/split0_large_bs4_steps500/scores/transaction_scores_with_labels.csv
+../exp/transaction/semi_supervised/split1/split0_hard/scores/transaction_scores_with_labels.csv
+../exp/transaction/semi_supervised/split1/split0_hard/scores/feature_attribution.csv
 ```
 
 ## Ghi Chú
